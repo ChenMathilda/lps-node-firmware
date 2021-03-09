@@ -39,11 +39,14 @@
 static uwbAlgorithm_t dummyAlgorithm;
 extern uwbAlgorithm_t uwbTwrAnchorAlgorithm;
 extern uwbAlgorithm_t uwbTwrTagAlgorithm;
+extern uwbAlgorithm_t uwbTWRP2PAlgorithm;
 extern uwbAlgorithm_t uwbSnifferAlgorithm;
 extern uwbAlgorithm_t uwbTdoaAlgorithm;
 extern uwbAlgorithm_t uwbTdoa2Algorithm;
 extern uwbAlgorithm_t uwbTdoa3Algorithm;
-static uwbAlgorithm_t *algorithm = &dummyAlgorithm;
+//static uwbAlgorithm_t *algorithm = &dummyAlgorithm;
+static uwbAlgorithm_t *algorithm = &uwbTWRP2PAlgorithm;
+//static uwbAlgorithm_t *algorithm = &uwbTwrAnchorAlgorithm;
 
 struct {
   uwbAlgorithm_t *algorithm;
@@ -54,6 +57,7 @@ struct {
   {.algorithm = &uwbSnifferAlgorithm,   .name = "Sniffer"},
   {.algorithm = &uwbTdoa2Algorithm,     .name = "TDoA Anchor V2"},
   {.algorithm = &uwbTdoa3Algorithm,     .name = "TDoA Anchor V3"},
+  {.algorithm = &uwbTWRP2PAlgorithm,    .name = "TWR P2P"},
   {NULL, NULL},
 };
 
@@ -74,23 +78,27 @@ static uint32_t timeout;
 static void txcallback(dwDevice_t *dev)
 {
   timeout = algorithm->onEvent(dev, eventPacketSent);
+  printf("LPS node:eventPacketSent_timeout = %d\r\n",timeout);
 }
 
 static void rxcallback(dwDevice_t *dev)
 {
   timeout = algorithm->onEvent(dev, eventPacketReceived);
+  //printf("LPS node:eventPacketReceived_timeout = %d\r\n",timeout);
 }
 
 static void rxTimeoutCallback(dwDevice_t * dev) {
   timeout = algorithm->onEvent(dev, eventReceiveTimeout);
+  //printf("LPS node:eventReceiveTimeout_timeout = %d\r\n",timeout);
 }
 
 static void rxfailedcallback(dwDevice_t *dev) {
   timeout = algorithm->onEvent(dev, eventReceiveFailed);
+  //printf("LPS node:eventReceiveFailed_timeout = %d\r\n",timeout);
 }
 
 
-void uwbInit()
+void uwbInit()//main.c
 {
   // Initializing the low level radio handling
   static StaticSemaphore_t irqSemaphoreBuffer;
@@ -108,20 +116,25 @@ void uwbInit()
   dwSetAntenaDelay(dwm, delay);
 
   // Reading and setting node configuration
-  cfgReadU8(cfgAddress, &config.address[0]);
+  cfgReadU8(cfgAddress, &config.address[0]);//0
   cfgReadU8(cfgMode, &config.mode);
+  printf("cfgMode: %d \n",config.mode);
   cfgFieldSize(cfgAnchorlist, &config.anchorListSize);
   if (config.anchorListSize <= MAX_ANCHORS) {
     cfgReadU8list(cfgAnchorlist, config.anchors, config.anchorListSize);
   }
 
   if (config.mode < uwbAlgorithmCount()) {
-    algorithm = availableAlgorithms[config.mode].algorithm;
+	  ///////////////////////////////////////////////
+    algorithm = availableAlgorithms[5/*config.mode*/].algorithm;
   } else {
-    algorithm = &dummyAlgorithm;
-  }
+	  //algorithm = &dummyAlgorithm;
+      algorithm = &uwbTWRP2PAlgorithm;///////////////////////////////////////////////
+	  //algorithm = &uwbTwrAnchorAlgorithm;
+}
 
   config.positionEnabled = cfgReadFP32list(cfgAnchorPos, config.position, 3);
+
 
   dwAttachSentHandler(dwm, txcallback);
   dwAttachReceivedHandler(dwm, rxcallback);
@@ -129,7 +142,7 @@ void uwbInit()
   dwAttachReceiveFailedHandler(dwm, rxfailedcallback);
 
   dwNewConfiguration(dwm);
-  dwSetDefaults(dwm);
+  dwSetDefaults(dwm);//TX_MODE/RX_MODE
 
   uint8_t useLowBitrate = 0;
   cfgReadU8(cfgLowBitrate, &useLowBitrate);
@@ -212,16 +225,23 @@ static int checkIrq()
 static void uwbTask(void* parameters)
 {
   configASSERT(isInit);
-
   algorithm->init(&config, dwm);
-
-  while(1) {
-    if (xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS)) {
-      do{
-          dwHandleInterrupt(dwm);
-      } while(checkIrq() != 0);
-    } else {
-      timeout = algorithm->onEvent(dwm, eventTimeout);
+  while(1)
+  {
+	  //printf("1/xSemaphoreTake = %d,timeout = %d\r\n",xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS),timeout);
+	  if(xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS) > 0 )
+	  {
+		  //printf("2/xSemaphoreTake = %d,timeout = %d\r\n",xSemaphoreTake(irqSemaphore, timeout/portTICK_PERIOD_MS),timeout);
+		  //printf("  in if-do\r\n");
+		  do{
+			  //printf("   do-checkIrq() = %d\r\n",(unsigned int)checkIrq());
+			  dwHandleInterrupt(dwm);
+		  } while(checkIrq() != 0);
+	  }
+	  else
+	  {
+		  //printf("  in else\r\n");
+		  timeout = algorithm->onEvent(dwm, eventTimeout);
     }
   }
 }
@@ -230,7 +250,7 @@ void uwbStart()
 {
   static StaticTask_t uwbStaticTask;
   static StackType_t uwbStaticStack[2*configMINIMAL_STACK_SIZE];
-
+  //printf("SYSTEM\t:  Starts UWB uwbTask\r\n");
   if (isInit) {
     xTaskCreateStatic(uwbTask, "uwb", 2*configMINIMAL_STACK_SIZE, NULL,
                       configMAX_PRIORITIES - 1, uwbStaticStack, &uwbStaticTask);
